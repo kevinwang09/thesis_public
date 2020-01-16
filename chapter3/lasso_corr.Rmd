@@ -1,0 +1,186 @@
+---
+title: "Lasso correlated selection"
+author: "Kevin Wang"
+date: "16 Jan 2020"
+output:
+  html_document:
+    code_folding: hide
+    fig_height: 6
+    fig_width: 12
+    toc: yes
+    number_sections: true
+    toc_depth: 3
+    toc_float: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+```{r}
+library(tidyverse)
+library(glmnet)
+library(mvtnorm)
+library(APES)
+library(furrr)
+library(ggrepel)
+
+plan(multiprocess(workers = 4))
+
+theme_set(theme_bw(18) +
+            theme(legend.position = "bottom"))
+```
+
+
+# Rho = 0.5
+```{r}
+set.seed(123)
+n = 500
+p = 100
+rho = 0.5
+rows = matrix(rep(c(1:p), p), nrow = p, byrow = F)
+cols = t(rows)
+XSigma = rho^abs(rows - cols)
+
+k = 6
+beta = c(rep(0.5, k), rep(0, p-k))
+```
+
+
+## Sim
+
+```{r}
+# x = rmvnorm(n = n, mean = rep(0, p), sigma = XSigma)
+# prob = APES::expit(x %*% beta)
+# y = rbinom(n = n, size = 1, prob = prob)
+
+set.seed(1234)
+nexp = 100
+list_x = replicate(
+  n = nexp,
+  expr = {rmvnorm(n = n, mean = rep(0, p), sigma = XSigma)}, simplify = FALSE)
+list_prob = purrr::map(.x = list_x, 
+                       .f = ~ APES::expit(.x %*% beta))
+list_y = purrr::map(
+  .x = list_prob,
+  .f = ~ rbinom(n = n, size = 1, prob = .x))
+```
+
+
+```{r}
+list_lasso = furrr::future_map2(
+  .x = list_x, 
+  .y = list_y, 
+  .f = ~ glmnet::cv.glmnet(
+    x = .x, y = .y, 
+    family = "binomial"))
+
+lasso_coef_df = list_lasso %>% 
+  purrr::map(coef, s = "lambda.min") %>% 
+  purrr::map(~ .x %>% as.matrix) %>% 
+  do.call(cbind, .) %>% 
+  magrittr::set_colnames(value = paste0("exp", 1:nexp)) %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column("variables") %>% 
+  tidyr::pivot_longer(cols = -variables,
+                      names_to = "exp_num",
+                      values_to = "coef") %>% 
+  as_tibble() %>% 
+  dplyr::mutate(
+    true_vars = variables %in% paste0("V", 1:k),
+    variables = variables %>% fct_relevel(
+      variables %>% gtools::mixedsort() %>% unique))
+
+lasso_coef_df %>% 
+  ggplot(aes(x = variables, y = coef,
+             colour = true_vars)) +
+  geom_boxplot() +
+  geom_hline(yintercept = 0.5) +
+  theme(axis.text.x = element_blank())
+
+lasso_coef_summ = lasso_coef_df %>% 
+  group_by(variables, true_vars) %>% 
+  summarise(asf = sum(coef != 0))
+
+lasso_coef_summ %>% 
+  ggplot(aes(x = variables, y = asf,
+             colour = true_vars,
+             label = ifelse(true_vars, as.character(variables), NA))) +
+  geom_point() +
+  geom_text_repel() +
+  theme(axis.text.x = element_blank())
+```
+
+
+
+## Rho = -0.5
+
+```{r}
+rho = -0.5
+rows = matrix(rep(c(1:p), p), nrow = p, byrow = F)
+cols = t(rows)
+XSigma = rho^abs(rows - cols)
+```
+
+
+```{r}
+set.seed(1234)
+list_x = replicate(
+  n = nexp,
+  expr = {rmvnorm(n = n, mean = rep(0, p), sigma = XSigma)}, simplify = FALSE)
+list_prob = purrr::map(.x = list_x, 
+                       .f = ~ APES::expit(.x %*% beta))
+list_y = purrr::map(
+  .x = list_prob,
+  .f = ~ rbinom(n = n, size = 1, prob = .x))
+```
+
+
+```{r}
+list_lasso = furrr::future_map2(
+  .x = list_x, 
+  .y = list_y, 
+  .f = ~ glmnet::cv.glmnet(
+    x = .x, y = .y, 
+    family = "binomial"))
+
+lasso_coef_df = list_lasso %>% 
+  purrr::map(coef, s = "lambda.min") %>% 
+  purrr::map(~ .x %>% as.matrix) %>% 
+  do.call(cbind, .) %>% 
+  magrittr::set_colnames(value = paste0("exp", 1:nexp)) %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column("variables") %>% 
+  tidyr::pivot_longer(cols = -variables,
+                      names_to = "exp_num",
+                      values_to = "coef") %>% 
+  as_tibble() %>% dplyr::mutate(
+    true_vars = variables %in% paste0("V", 1:k),
+    variables = variables %>% fct_relevel(
+      variables %>% gtools::mixedsort() %>% unique))
+
+lasso_coef_df %>% 
+  ggplot(aes(x = variables, y = coef,
+             colour = true_vars)) +
+  geom_boxplot() +
+  geom_hline(yintercept = 0.5) +
+  theme(axis.text.x = element_blank())
+
+lasso_coef_summ = lasso_coef_df %>% 
+  group_by(variables, true_vars) %>% 
+  summarise(asf = sum(coef != 0))
+
+lasso_coef_summ %>% 
+  ggplot(aes(x = variables, y = asf,
+             colour = true_vars,
+             label = ifelse(true_vars, as.character(variables), NA))) +
+  geom_point() +
+  geom_text_repel() +
+  theme(axis.text.x = element_blank())
+```
+
+
+```{r}
+sessionInfo()
+```
+
